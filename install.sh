@@ -144,30 +144,55 @@ echo ""
 line
 echo ""
 
-# ─── Параметры сервера Б ─────────────────────────────────────
+# ─── Параметры сервера Б — парсинг из VLESS-ссылки ───────────
 echo -e "${BOLD}Параметры сервера Б (Финляндия):${NC}"
-echo -e "${DIM}Возьми из панели Remnanode${NC}"
+echo -e "${DIM}Вставь VLESS-ссылку из Remnanode (начинается с vless://)${NC}"
 echo ""
 
-ask "Адрес сервера Б (IP или домен): "
-read -r SERVER_B_ADDRESS
-[[ -z "$SERVER_B_ADDRESS" ]] && { err "Адрес обязателен"; exit 1; }
+ask "VLESS-ссылка сервера Б: "
+read -r VLESS_LINK
 
-ask "Порт сервера Б [443]: "
-read -r SERVER_B_PORT
-[[ -z "$SERVER_B_PORT" ]] && SERVER_B_PORT="443"
+if [[ ! "$VLESS_LINK" =~ ^vless:// ]]; then
+    err "Ссылка должна начинаться с vless://"
+    exit 1
+fi
 
-ask "UUID клиента на сервере Б: "
-read -r SERVER_B_UUID
-[[ -z "$SERVER_B_UUID" ]] && { err "UUID обязателен"; exit 1; }
+# Парсим ссылку: vless://UUID@ADDRESS:PORT?params#name
+SERVER_B_UUID=$(echo "$VLESS_LINK" | sed 's|vless://||' | cut -d'@' -f1)
+ADDR_PORT=$(echo "$VLESS_LINK" | sed 's|vless://[^@]*@||' | cut -d'?' -f1)
+SERVER_B_ADDRESS=$(echo "$ADDR_PORT" | cut -d':' -f1)
+SERVER_B_PORT=$(echo "$ADDR_PORT" | cut -d':' -f2)
 
-ask "Path для XHTTP [/xhttp]: "
-read -r SERVER_B_PATH
+# Парсим query-параметры
+QUERY=$(echo "$VLESS_LINK" | grep -oP '\?\K[^#]+' || echo "")
+get_param() { echo "$QUERY" | tr '&' '\n' | grep "^$1=" | cut -d'=' -f2- | sed 's/%2F/\//g'; }
+
+SERVER_B_PATH=$(get_param "path")
+SERVER_B_SNI=$(get_param "sni")
+SERVER_B_HOST=$(get_param "host")
+SERVER_B_MODE=$(get_param "mode")
+SERVER_B_FP=$(get_param "fp")
+SERVER_B_ALPN=$(get_param "alpn")
+
 [[ -z "$SERVER_B_PATH" ]] && SERVER_B_PATH="/xhttp"
-
-ask "SNI сервера Б [${SERVER_B_ADDRESS}]: "
-read -r SERVER_B_SNI
 [[ -z "$SERVER_B_SNI" ]] && SERVER_B_SNI="$SERVER_B_ADDRESS"
+[[ -z "$SERVER_B_HOST" ]] && SERVER_B_HOST="$SERVER_B_SNI"
+[[ -z "$SERVER_B_MODE" ]] && SERVER_B_MODE="auto"
+[[ -z "$SERVER_B_FP" ]] && SERVER_B_FP="chrome"
+[[ -z "$SERVER_B_ALPN" ]] && SERVER_B_ALPN="h2,http/1.1"
+
+# Конвертируем alpn в JSON массив: "h2,http/1.1" → ["h2","http/1.1"]
+ALPN_JSON=$(echo "$SERVER_B_ALPN" | sed 's/,/","/g' | sed 's/^/["/' | sed 's/$/"]/')
+
+echo ""
+ok "Распарсено из ссылки:"
+echo -e "  Адрес:  ${CYAN}${SERVER_B_ADDRESS}${NC}"
+echo -e "  Порт:   ${CYAN}${SERVER_B_PORT}${NC}"
+echo -e "  UUID:   ${CYAN}${SERVER_B_UUID}${NC}"
+echo -e "  Path:   ${CYAN}${SERVER_B_PATH}${NC}"
+echo -e "  SNI:    ${CYAN}${SERVER_B_SNI}${NC}"
+echo -e "  Mode:   ${CYAN}${SERVER_B_MODE}${NC}"
+echo -e "  ALPN:   ${CYAN}${SERVER_B_ALPN}${NC}"
 
 echo ""
 ok "Все параметры собраны"
@@ -440,10 +465,13 @@ cat > "$CONFIG_PATH" << XRAY_EOF
         "tlsSettings": {
           "serverName": "${SERVER_B_SNI}",
           "allowInsecure": false,
-          "fingerprint": "chrome"
+          "fingerprint": "${SERVER_B_FP}",
+          "alpn": ${ALPN_JSON}
         },
         "xhttpSettings": {
-          "path": "${SERVER_B_PATH}"
+          "path": "${SERVER_B_PATH}",
+          "host": "${SERVER_B_HOST}",
+          "mode": "${SERVER_B_MODE}"
         }
       }
     },
